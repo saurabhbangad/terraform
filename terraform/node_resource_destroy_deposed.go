@@ -9,77 +9,68 @@ import (
 	"github.com/hashicorp/terraform/states"
 )
 
-// DeposedTransformer is a GraphTransformer that adds nodes to the graph for
-// the deposed objects associated with a given resource instance.
-type DeposedTransformer struct {
-	// State is the global state, from which we'll retrieve the state for
-	// the instance given in InstanceAddr.
-	State *states.State
-
-	// InstanceAddr is the address of the instance whose deposed objects will
-	// have graph nodes created.
-	InstanceAddr addrs.AbsResourceInstance
-
-	// The provider used by the resourced which were deposed
-	ResolvedProvider addrs.AbsProviderConfig
-}
-
-func (t *DeposedTransformer) Transform(g *Graph) error {
-	rs := t.State.Resource(t.InstanceAddr.ContainingResource())
-	if rs == nil {
-		// If the resource has no state then there can't be deposed objects.
-		return nil
-	}
-	is := rs.Instances[t.InstanceAddr.Resource.Key]
-	if is == nil {
-		// If the instance has no state then there can't be deposed objects.
-		return nil
-	}
-
-	providerAddr := rs.ProviderConfig
-
-	for k := range is.Deposed {
-		g.Add(&graphNodeDeposedResource{
-			Addr:             t.InstanceAddr,
-			DeposedKey:       k,
-			RecordedProvider: providerAddr,
-			ResolvedProvider: t.ResolvedProvider,
-		})
-	}
-
-	return nil
-}
-
-// graphNodeDeposedResource is the graph vertex representing a deposed resource.
+// graphNodeDeposedResource is the graph vertex representing a deposed resource
+// instance. Its name is historical: it actually represents a specific resource
+// instance, rather than a whole resource.
 type graphNodeDeposedResource struct {
-	Addr             addrs.AbsResourceInstance
-	DeposedKey       states.DeposedKey
-	RecordedProvider addrs.AbsProviderConfig
-	ResolvedProvider addrs.AbsProviderConfig
+	*NodeAbstractResourceInstance
+	DeposedKey states.DeposedKey
 }
 
 var (
-	_ GraphNodeProviderConsumer = (*graphNodeDeposedResource)(nil)
-	_ GraphNodeEvalable         = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeResource            = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeResourceInstance    = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeDestroyer           = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeDestroyerCBD        = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeReferenceable       = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeReferencer          = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeEvalable            = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeProviderConsumer    = (*graphNodeDeposedResource)(nil)
+	_ GraphNodeProvisionerConsumer = (*graphNodeDeposedResource)(nil)
 )
 
 func (n *graphNodeDeposedResource) Name() string {
 	return fmt.Sprintf("%s (deposed %s)", n.Addr.String(), n.DeposedKey)
 }
 
-func (n *graphNodeDeposedResource) ProvidedBy() (addrs.AbsProviderConfig, bool) {
-	return n.RecordedProvider, true
+// GraphNodeReferenceable implementation
+func (n *graphNodeDeposedResource) ReferenceableAddrs() []addrs.Referenceable {
+	// Deposed objects don't participate in references.
+	return nil
 }
 
-func (n *graphNodeDeposedResource) SetProvider(addr addrs.AbsProviderConfig) {
-	// Because our ProvidedBy returns exact=true, this is actually rather
-	// pointless and should always just be the address we asked for.
-	n.RecordedProvider = addr
+// GraphNodeReferencer implementation
+func (n *graphNodeDeposedResource) References() []*addrs.Reference {
+	// We don't evaluate configuration for deposed objects, so they effectively
+	// make no references.
+	return nil
+}
+
+// GraphNodeDestroyer
+func (n *graphNodeDeposedResource) DestroyAddr() *addrs.AbsResourceInstance {
+	addr := n.ResourceInstanceAddr()
+	return &addr
+}
+
+// GraphNodeDestroyerCBD
+func (n *graphNodeDeposedResource) CreateBeforeDestroy() bool {
+	// A deposed instance is always CreateBeforeDestroy by definition, since
+	// we use deposed only to handle create-before-destroy.
+	return true
+}
+
+// GraphNodeDestroyerCBD
+func (n *graphNodeDeposedResource) ModifyCreateBeforeDestroy(v bool) error {
+	if !v {
+		// Should never happen: deposed instances are _always_ create_before_destroy.
+		return fmt.Errorf("can't deactivate create_before_destroy for a deposed instance")
+	}
+	return nil
 }
 
 // GraphNodeEvalable impl.
 func (n *graphNodeDeposedResource) EvalTree() EvalNode {
-	addr := n.Addr
+	addr := n.ResourceInstanceAddr()
 
 	var provider providers.Interface
 	var providerSchema *ProviderSchema
@@ -187,4 +178,26 @@ func (n *graphNodeDeposedResource) EvalTree() EvalNode {
 	})
 
 	return seq
+}
+
+// GraphNodeDeposer is an optional interface implemented by graph nodes that
+// might create a single new deposed object for a specific associated resource
+// instance, allowing a caller to optionally pre-allocate a DeposedKey for
+// it.
+type GraphNodeDeposer interface {
+	// SetPreallocatedDeposedKey will be called during graph construction
+	// if a particular node must use a pre-allocated deposed key if/when it
+	// "deposes" the current object of its associated resource instance.
+	SetPreallocatedDeposedKey(key states.DeposedKey)
+}
+
+// graphNodeDeposer is an embeddable implementation of GraphNodeDeposer.
+// Embed it in a node type to get automatic support for it, and then access
+// the field PreallocatedDeposedKey to access any pre-allocated key.
+type graphNodeDeposer struct {
+	PreallocatedDeposedKey states.DeposedKey
+}
+
+func (n *graphNodeDeposer) SetPreallocatedDeposedKey(key states.DeposedKey) {
+	n.PreallocatedDeposedKey = key
 }
