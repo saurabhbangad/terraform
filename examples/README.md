@@ -25,3 +25,4 @@ repositories contain documentation specific to their provider:
 * [DigitalOcean Examples](https://github.com/terraform-providers/terraform-provider-digitalocean/tree/master/examples)
 * [Google Cloud Examples](https://github.com/terraform-providers/terraform-provider-google/tree/master/examples)
 * [OpenStack Examples](https://github.com/terraform-providers/terraform-provider-openstack/tree/master/examples)
+* [Oracle Cloud Infrastructure Examples](https://github.com/terraform-providers/terraform-provider-oci/tree/master/docs/examples) 
